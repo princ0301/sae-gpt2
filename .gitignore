@@ -1,0 +1,41 @@
+# Environments
+.venv/
+venv/
+env/
+
+# Secrets (never commit these)
+.env
+.env.*
+*.key
+*token*
+secrets.*
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Experiment outputs and large files
+checkpoints/
+wandb/
+*.pt
+*.pth
+*.safetensors
+*.ckpt
+runs/
+logs/
+outputs/
+data_cache/
+
+# Notebooks and editors
+.ipynb_checkpoints/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

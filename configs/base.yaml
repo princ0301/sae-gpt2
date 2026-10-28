@@ -1,0 +1,21 @@
+seed: 0
+model_name: gpt2
+layer: 6
+d_sae: 12288            # 16x expansion
+ctx_len: 128
+buffer_tokens: 262144
+batch_size: 4096
+gen_batch: 32
+total_tokens: 50000000  # validation run; raise to 150M-300M for the final run
+lr: 3.0e-4
+l1_coeff: 5.0           # starting point, sweep this
+l1_warmup_frac: 0.05
+lr_warmup_frac: 0.05
+lr_decay_frac: 0.2      # linear decay to 0 over the last 20% of steps
+dead_window_tokens: 10000000
+log_every: 50
+ckpt_every: 1000
+ckpt_dir: checkpoints
+run_name: relu_16x_l1_5
+wandb: false
+wandb_project: sae-gpt2
