@@ -22,9 +22,19 @@ def test_decoder_rows_unit_norm_at_init_and_after_normalize():
     assert torch.allclose(sae.W_dec.norm(dim=-1), torch.ones(64), atol=1e-5)
 
 
-def test_enc_initialized_as_dec_transpose():
+def test_enc_initialized_as_scaled_dec_transpose():
     sae = SAE(16, 64)
-    assert torch.equal(sae.W_enc.data, sae.W_dec.data.T)
+    assert torch.allclose(sae.W_enc.data, sae.W_dec.data.T * sae.enc_init_scale)
+
+
+def test_initial_reconstruction_is_not_wildly_off():
+    d_model, d_sae = 768, 12288
+    sae = SAE(d_model, d_sae)
+    x = torch.randn(256, d_model)  # norm ~ sqrt(768), like the real data
+    with torch.no_grad():
+        mse = (sae(x)[0] - x).pow(2).sum(-1).mean()
+    var = x.pow(2).sum(-1).mean()
+    assert mse < 0.5 * var  # before the fix this ratio was ~50x
 
 
 def test_remove_parallel_grad():
@@ -42,6 +52,16 @@ def test_init_b_dec():
     mean = torch.randn(16)
     sae.init_b_dec(mean)
     assert torch.equal(sae.b_dec.data, mean)
+
+
+def test_last_active_tracks_firing():
+    sae = SAE(8, 32)
+    x = torch.randn(16, 8)
+    sae.loss(x, l1_coeff=1.0)
+    assert sae.last_active.shape == (32,)
+    assert sae.last_active.dtype == torch.bool
+    _, f = sae(x)
+    assert torch.equal(sae.last_active, (f > 0).any(0))
 
 
 def test_overfit_on_synthetic_sparse_data():

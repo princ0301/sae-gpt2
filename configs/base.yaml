@@ -19,3 +19,4 @@ ckpt_dir: checkpoints
 run_name: relu_16x_l1_5
 wandb: false
 wandb_project: sae-gpt2
+

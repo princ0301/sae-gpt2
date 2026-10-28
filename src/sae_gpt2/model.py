@@ -18,10 +18,17 @@ class SAE(nn.Module):
         W_dec = torch.randn(d_sae, d_model, generator=g)
         W_dec = W_dec / W_dec.norm(dim=-1, keepdim=True)
 
+        # Scale the encoder so the initial reconstruction has gain ~1.
+        # With unit-norm random decoder rows, gain ~ s * d_sae / (2 * d_model).
+        self.enc_init_scale = min(1.0, 2 * d_model / d_sae)
+
         self.W_dec = nn.Parameter(W_dec)
-        self.W_enc = nn.Parameter(W_dec.T.clone())  # init as decoder transpose
+        self.W_enc = nn.Parameter(W_dec.T.clone() * self.enc_init_scale)
         self.b_enc = nn.Parameter(torch.zeros(d_sae))
         self.b_dec = nn.Parameter(torch.zeros(d_model))
+
+        # Set by loss(): which features fired in the most recent batch
+        self.last_active = None
 
     # ---- forward pieces -------------------------------------------------
     def encode(self, x: torch.Tensor) -> torch.Tensor:
