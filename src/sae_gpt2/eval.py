@@ -16,6 +16,16 @@ def load_sae(path, device):
     return sae, ck["scale"], ck["cfg"]
 
 
+def make_batches(tokenizer, ctx_len, batch_size, device):
+    """Fresh held-out stream each call, so passes never consume each other's data."""
+    buf = []
+    for ctx in token_stream(tokenizer, ctx_len=ctx_len, heldout=True):
+        buf.append(ctx)
+        if len(buf) == batch_size:
+            yield torch.stack(buf).to(device)
+            buf = []
+
+
 def splice_hook(fn, scale):
     """Replace activations at positions 1: with fn(act * scale) / scale.
     Position 0 (BOS) is left alone, exactly as in training."""
@@ -27,20 +37,27 @@ def splice_hook(fn, scale):
 
 
 @torch.no_grad()
-def evaluate(model, sae, scale, layer=6, n_batches=100, batch_size=32, ctx_len=128):
+def evaluate(model, sae, scale, layer=6, n_batches=100, batch_size=32,
+             ctx_len=128, n_mean_batches=10):
     device = next(model.parameters()).device
     hook_name = f"blocks.{layer}.hook_resid_pre"
-    stream = token_stream(model.tokenizer, ctx_len=ctx_len, heldout=True)
 
-    def batches():
-        buf = []
-        for ctx in stream:
-            buf.append(ctx)
-            if len(buf) == batch_size:
-                yield torch.stack(buf).to(device)
-                buf = []
+    # Mean of scaled activations (positions 1:), for the mean-ablation baseline.
+    # Uses the first n_mean_batches held-out batches, which overlap slightly
+    # with the eval batches; the effect on the baseline should be small.
+    acc = torch.zeros(sae.d_model, dtype=torch.float64, device=device)
+    n_acc = 0
+    for tokens in islice(make_batches(model.tokenizer, ctx_len, batch_size, device),
+                         n_mean_batches):
+        _, cache = model.run_with_cache(tokens, names_filter=hook_name,
+                                        stop_at_layer=layer + 1)
+        a = cache[hook_name][:, 1:, :].reshape(-1, sae.d_model) * scale
+        acc += a.double().sum(0)
+        n_acc += a.shape[0]
+    mean_vec = (acc / n_acc).float()
 
-    stats = dict(n=0, se=0.0, sum_x=torch.zeros(sae.d_model, dtype=torch.float64, device=device),
+    stats = dict(n=0, se=0.0,
+                 sum_x=torch.zeros(sae.d_model, dtype=torch.float64, device=device),
                  sum_x2=0.0, l0=0.0, fires=torch.zeros(sae.d_sae, device=device))
 
     def sae_fn(x):
@@ -57,11 +74,13 @@ def evaluate(model, sae, scale, layer=6, n_batches=100, batch_size=32, ctx_len=1
     fns = {
         "identity": lambda x: x,
         "zero": lambda x: torch.zeros_like(x),
+        "mean": lambda x: mean_vec.expand_as(x),
         "sae": sae_fn,
     }
     ce = {k: 0.0 for k in ["clean", *fns]}
     n_done = 0
-    for tokens in islice(batches(), n_batches):
+    for tokens in islice(make_batches(model.tokenizer, ctx_len, batch_size, device),
+                         n_batches):
         ce["clean"] += model(tokens, return_type="loss").item()
         for name, fn in fns.items():
             ce[name] += model.run_with_hooks(
@@ -81,8 +100,11 @@ def evaluate(model, sae, scale, layer=6, n_batches=100, batch_size=32, ctx_len=1
     mse = stats["se"] / n
     density = stats["fires"] / n
     return {
-        "ce_clean": ce["clean"], "ce_zero": ce["zero"], "ce_sae": ce["sae"],
-        "loss_recovered": (ce["zero"] - ce["sae"]) / (ce["zero"] - ce["clean"]),
+        "ce_clean": ce["clean"], "ce_zero": ce["zero"], "ce_mean": ce["mean"],
+        "ce_sae": ce["sae"],
+        "ce_cost": ce["sae"] - ce["clean"],
+        "loss_recovered_zero": (ce["zero"] - ce["sae"]) / (ce["zero"] - ce["clean"]),
+        "loss_recovered_mean": (ce["mean"] - ce["sae"]) / (ce["mean"] - ce["clean"]),
         "l0": stats["l0"] / n,
         "explained_var": 1 - mse / var,
         "dead_frac": (stats["fires"] == 0).float().mean().item(),
@@ -105,4 +127,4 @@ if __name__ == "__main__":
     res = evaluate(model, sae, scale, layer=cfg["layer"], n_batches=args.n_batches,
                    ctx_len=cfg["ctx_len"])
     for k, v in res.items():
-        print(f"{k:>15}: {v:.4f}" if isinstance(v, float) else f"{k:>15}: {v}")
+        print(f"{k:>20}: {v:.4f}" if isinstance(v, float) else f"{k:>20}: {v}")
