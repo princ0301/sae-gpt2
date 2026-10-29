@@ -5,31 +5,36 @@ from datasets import load_dataset
 N_HELDOUT_DOCS = 20000
 
 def token_stream(tokenizer, ctx_len=128, heldout=False,
-                 dataset="Skylion007/openwebtext"):
+                 dataset="Skylion007/openwebtext", skip_docs=0, counter=None):
     """Yield LongTensors of shape [ctx_len]: BOS + (ctx_len - 1) text tokens.
 
     Documents are concatenated with EOS separators and chunked.
     heldout=True streams only the first N_HELDOUT_DOCS docs; heldout=False
     skips them, so train and eval text never overlap.
+    skip_docs: extra training docs to skip (used when resuming).
+    counter: optional dict with a "docs" key, incremented per document read.
     """
     ds = load_dataset(dataset, split="train", streaming=True)
-    ds = ds.take(N_HELDOUT_DOCS) if heldout else ds.skip(N_HELDOUT_DOCS)
+    if heldout:
+        ds = ds.take(N_HELDOUT_DOCS)
+    else:
+        ds = ds.skip(N_HELDOUT_DOCS + skip_docs)
 
     bos, eos = tokenizer.bos_token_id, tokenizer.eos_token_id
     body = ctx_len - 1
     pending = []
     for ex in ds:
-        # TransformerLens's tokenizer can prepend BOS on its own, so disable
-        # special tokens and strip a leading BOS if one still sneaks through.
+        if counter is not None:
+            counter["docs"] += 1
         ids = tokenizer.encode(ex["text"], add_special_tokens=False)
         if ids and ids[0] == bos:
             ids = ids[1:]
         pending.extend(ids)
-        pending.append(eos)  # document separator (same id as BOS in GPT-2)
+        pending.append(eos)
         while len(pending) >= body:
             chunk, pending = pending[:body], pending[body:]
             yield torch.tensor([bos] + chunk, dtype=torch.long)
-
+            
 class ActivationBuffer:
     """Generates layer activations on the fly, shuffles them, serves minibatches.
 
